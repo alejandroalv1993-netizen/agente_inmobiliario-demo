@@ -30,19 +30,12 @@ CONDICIONES DE LA AGENCIA:
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Habitat Futuro", page_icon="🏢", layout="centered")
 
-# --- ESTILOS CSS PERSONALIZADOS (CORREGIDO) ---
+# --- ESTILOS CSS PERSONALIZADOS ---
 st.markdown("""
     <style>
-    /* Ocultar menú de hamburguesa (los 3 puntos) y footer */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     
-    /* IMPORTANTE: Hemos quitado 'header {visibility: hidden;}' 
-       para que la flecha (>) del menú lateral siga siendo visible 
-       cuando se cierra el panel.
-    */
-    
-    /* Estilo del título principal */
     .hero-title {
         font-family: 'Helvetica Neue', sans-serif;
         font-weight: 700;
@@ -59,7 +52,6 @@ st.markdown("""
         margin-bottom: 2rem;
     }
     
-    /* Retoques en los botones */
     .stButton>button {
         border-radius: 20px;
         font-weight: bold;
@@ -94,7 +86,6 @@ def obtener_fecha_en_espanol():
 
 # --- BARRA LATERAL (LIMPIA) ---
 with st.sidebar:
-    # Logo centrado (simulado con columnas)
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
         st.image("https://cdn-icons-png.flaticon.com/512/1018/1018524.png", width=100)
@@ -104,9 +95,6 @@ with st.sidebar:
     
     st.divider()
     
-    # --- MENÚS DESPLEGABLES (Más limpio) ---
-    
-    # 1. Configuración (Oculta por defecto)
     with st.expander("⚙️ Configuración Técnica"):
         if not api_key:
             api_key = st.text_input("Google API Key", type="password")
@@ -115,7 +103,6 @@ with st.sidebar:
         else:
             st.success("Licencia activa")
 
-    # 2. Administración (Oculta por defecto)
     with st.expander("🔐 Área Privada (Dueños)"):
         admin_pass = st.text_input("Contraseña", type="password", key="admin_pass")
         
@@ -126,13 +113,12 @@ with st.sidebar:
                     df = pd.read_csv("leads_inmobiliaria.csv")
                     st.caption(f"Total Clientes: {len(df)}")
                     
-                    # Botón descarga
                     csv = df.to_csv(index=False).encode('utf-8')
                     st.download_button("📥 Descargar CRM", csv, "clientes.csv", "text/csv")
                     
-                    # Vista previa mini
-                    display_cols = [c for c in df.columns if c in ["Nombre", "Teléfono", "Interés"]]
-                    st.dataframe(df[display_cols].tail(3), hide_index=True)
+                    # Vista previa más completa para debug
+                    cols_a_mostrar = [c for c in df.columns if c in ["Nombre", "Teléfono", "Reunión/Visita", "Interés"]]
+                    st.dataframe(df[cols_a_mostrar].tail(3), hide_index=True)
                     
                 except Exception as e:
                     st.error("Error BD")
@@ -147,82 +133,86 @@ with st.sidebar:
 # --- LÓGICA INTELIGENTE DE CONEXIÓN ---
 
 def seleccionar_modelo_activo(api_key):
-    """
-    Selecciona el mejor modelo disponible probando conexión real.
-    Prueba una lista exhaustiva de variantes para evitar errores 404.
-    """
-    # Lista ampliada con nombres técnicos específicos
     candidatos = [
         "gemini-1.5-flash",
         "gemini-1.5-flash-latest",
-        "gemini-1.5-flash-001",
-        "gemini-1.5-flash-002",
         "gemini-1.5-pro",
         "gemini-1.5-pro-latest",
-        "gemini-1.5-pro-001",
-        "gemini-1.5-pro-002",
-        "gemini-1.0-pro",
-        "gemini-2.0-flash-exp" # Experimental por si acaso
+        "gemini-pro",
+        "gemini-1.0-pro"
     ]
-    
-    # st.toast("📡 Buscando servidor disponible...", icon="🔍") # Comentado para no saturar UI
     
     for modelo in candidatos:
         try:
-            # Intentamos una conexión "silenciosa"
             tester = ChatGoogleGenerativeAI(model=modelo, google_api_key=api_key)
             tester.invoke("test") 
-            # Si llegamos aquí, ¡funciona!
             return modelo
         except:
             continue
-    
-    # Si todo falla, devolvemos uno por defecto pero el usuario verá el error después
     return "gemini-1.5-flash"
 
 def extraer_datos_cliente(texto_usuario, llm):
+    """
+    Extrae datos usando Few-Shot Learning (Ejemplos) para mayor precisión.
+    """
     fecha_hoy_txt, anio_actual = obtener_fecha_en_espanol()
     
     prompt_extraccion = [
         SystemMessage(content=f"""
-        CONTEXTO TEMPORAL: Hoy es {fecha_hoy_txt}.
-        INVENTARIO PARA REFERENCIAS:
+        ERES UN MOTOR DE EXTRACCIÓN DE DATOS CRM.
+        CONTEXTO TEMPORAL: Hoy es {fecha_hoy_txt}. Año: {anio_actual}.
+        
+        INVENTARIO:
         {INVENTARIO_REAL}
         
-        Tu tarea es extraer datos para el CRM.
-        Devuelve SOLO una línea con este formato exacto:
+        TU MISIÓN:
+        Analiza el texto del usuario y devuelve UNA sola línea con 4 campos separados por tuberías (|):
         NOMBRE | TELEFONO | CITA_COMPLETA | INTERES
         
-        Reglas CRÍTICAS:
-        1. Si no encuentras el dato, escribe "SKIP".
-        2. CITA_COMPLETA: Formato "DD/MM/YYYY HH:MM".
-        3. INTERES (IMPORTANTE):
-           - Debes identificar de qué propiedad habla el usuario y devolver SOLO su código (ej: "REF-001").
-           - Si dice "el ático", escribe "REF-001".
-           - Si dice "el loft", escribe "REF-003".
-           - Si no habla de ninguno en concreto, escribe "GENERAL".
+        EJEMPLOS DE ENTRENAMIENTO (ÚSALOS COMO GUÍA):
+        
+        Usuario: "Hola, soy Ana, mi movil es 600112233 y quiero ver el ático mañana a las 5"
+        Tu respuesta: Ana | 600112233 | {anio_actual}-MM-DD 17:00 | REF-001
+        
+        Usuario: "Me interesa el piso de chamberi, llamame al 911223344"
+        Tu respuesta: SKIP | 911223344 | SKIP | REF-002
+        
+        Usuario: "Quiero cita para el loft el martes 20 por la tarde. Soy Carlos."
+        Tu respuesta: Carlos | SKIP | 20/MM/{anio_actual} (Tarde) | REF-003
+        
+        REGLAS:
+        1. Separador OBLIGATORIO: |
+        2. Si falta un dato, pon: SKIP
+        3. Para INTERES, usa SIEMPRE el código (REF-XXX). Si no sabes cual es, pon GENERAL.
+        4. Para CITA_COMPLETA, calcula la fecha exacta basándote en que hoy es {fecha_hoy_txt}.
         """),
-        HumanMessage(content=f"Analiza este mensaje y extrae los datos: '{texto_usuario}'")
+        HumanMessage(content=f"Analiza esto ahora mismo: '{texto_usuario}'")
     ]
     try:
-        respuesta = llm.invoke(prompt_extraccion).content
+        respuesta = llm.invoke(prompt_extraccion).content.strip()
+        # Limpieza de seguridad por si mete comillas o saltos de línea
+        respuesta = respuesta.replace("\n", "").replace('"', '').replace("'", "")
+        
         partes = respuesta.split("|")
-        if len(partes) == 4:
-            return {
-                "Nombre": partes[0].strip(),
-                "Teléfono": partes[1].strip(),
-                "Reunión/Visita": partes[2].strip(),
-                "Interés": partes[3].strip() 
-            }
-    except:
-        pass
-    
-    return {
-        "Nombre": "SKIP",
-        "Teléfono": "SKIP",
-        "Reunión/Visita": "SKIP",
-        "Interés": "SKIP"
-    }
+        
+        # Corrección automática: Si la IA devuelve menos de 4 partes, rellenamos
+        while len(partes) < 4:
+            partes.append("SKIP")
+            
+        return {
+            "Nombre": partes[0].strip(),
+            "Teléfono": partes[1].strip(),
+            "Reunión/Visita": partes[2].strip(),
+            "Interés": partes[3].strip() 
+        }
+    except Exception as e:
+        # En caso de error total, devolvemos estructura vacía segura
+        return {
+            "Nombre": "SKIP",
+            "Teléfono": "SKIP",
+            "Reunión/Visita": "SKIP",
+            "Interés": "SKIP"
+        }
 
 def guardar_lead(texto_usuario, llm):
     palabras_clave = ["@","correo", "mail", "llamame", "tlf", "telefono", "teléfono", "6", "visita", "verlo", "cita", "cambiar", "mejor el", "puedo el", "quedamos", "reunión", "a las"]
@@ -286,9 +276,8 @@ def guardar_lead(texto_usuario, llm):
         return True
     return False
 
-# --- INTERFAZ PRINCIPAL (HERO SECTION) ---
+# --- INTERFAZ PRINCIPAL ---
 
-# Título personalizado con HTML/CSS
 st.markdown('<h1 class="hero-title">Habitat Futuro</h1>', unsafe_allow_html=True)
 st.markdown('<p class="hero-subtitle">Encuentra tu hogar ideal en el corazón de la ciudad</p>', unsafe_allow_html=True)
 
@@ -296,7 +285,6 @@ if not api_key:
     st.info("👈 Por favor, inicia sesión con la clave API en el menú lateral.")
     st.stop()
 
-# Configuración de modelo
 if "modelo_seleccionado" not in st.session_state:
     with st.spinner("Conectando con el servidor..."):
         st.session_state.modelo_seleccionado = seleccionar_modelo_activo(api_key)
@@ -309,7 +297,6 @@ try:
     )
 except Exception as e:
     st.error("Error de conexión. Verifica la API Key.")
-    st.info("Detalles del error: " + str(e)) # Muestra detalles para depuración si falla
     st.stop()
 
 # Historial
@@ -328,7 +315,6 @@ if "messages" not in st.session_state:
         """)
     ]
 
-# Renderizar chat
 for msg in st.session_state.messages:
     if isinstance(msg, HumanMessage):
         with st.chat_message("user"):
@@ -337,7 +323,6 @@ for msg in st.session_state.messages:
         with st.chat_message("assistant", avatar="👩‍💼"):
             st.write(msg.content)
 
-# Input
 if prompt := st.chat_input("Estoy buscando..."):
     with st.chat_message("user"):
         st.write(prompt)
