@@ -30,13 +30,17 @@ CONDICIONES DE LA AGENCIA:
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Habitat Futuro", page_icon="🏢", layout="centered")
 
-# --- ESTILOS CSS PERSONALIZADOS (MAQUILLAJE UI) ---
+# --- ESTILOS CSS PERSONALIZADOS (CORREGIDO) ---
 st.markdown("""
     <style>
-    /* Ocultar menú de hamburguesa y footer de Streamlit "Made with Streamlit" */
+    /* Ocultar menú de hamburguesa (los 3 puntos) y footer */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
+    
+    /* IMPORTANTE: Hemos quitado 'header {visibility: hidden;}' 
+       para que la flecha (>) del menú lateral siga siendo visible 
+       cuando se cierra el panel.
+    */
     
     /* Estilo del título principal */
     .hero-title {
@@ -140,7 +144,7 @@ with st.sidebar:
         elif admin_pass:
             st.error("Acceso denegado")
 
-# --- LÓGICA INTELIGENTE DE CONEXIÓN (MEGA ROBUSTA) ---
+# --- LÓGICA INTELIGENTE DE CONEXIÓN ---
 
 def seleccionar_modelo_activo(api_key):
     """
@@ -161,7 +165,7 @@ def seleccionar_modelo_activo(api_key):
         "gemini-2.0-flash-exp" # Experimental por si acaso
     ]
     
-    st.toast("📡 Buscando servidor disponible...", icon="🔍")
+    # st.toast("📡 Buscando servidor disponible...", icon="🔍") # Comentado para no saturar UI
     
     for modelo in candidatos:
         try:
