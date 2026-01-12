@@ -130,16 +130,22 @@ with st.sidebar:
         elif admin_pass:
             st.error("Acceso denegado")
 
-# --- LÓGICA INTELIGENTE DE CONEXIÓN ---
+# --- LÓGICA INTELIGENTE DE CONEXIÓN (LISTA AMPLIADA) ---
 
 def seleccionar_modelo_activo(api_key):
+    # Probamos TODAS las variantes posibles
     candidatos = [
         "gemini-1.5-flash",
+        "gemini-1.5-flash-001",
+        "gemini-1.5-flash-002",
         "gemini-1.5-flash-latest",
         "gemini-1.5-pro",
+        "gemini-1.5-pro-001",
+        "gemini-1.5-pro-002",
         "gemini-1.5-pro-latest",
         "gemini-pro",
-        "gemini-1.0-pro"
+        "gemini-1.0-pro",
+        "gemini-2.0-flash-exp" # Último recurso (experimental)
     ]
     
     for modelo in candidatos:
@@ -149,12 +155,10 @@ def seleccionar_modelo_activo(api_key):
             return modelo
         except:
             continue
-    return "gemini-1.5-flash"
+    # Si falla todo, devolvemos gemini-pro que suele ser el más estable en cuentas viejas
+    return "gemini-pro"
 
 def extraer_datos_cliente(texto_usuario, llm):
-    """
-    Extrae datos usando Few-Shot Learning (Ejemplos) para mayor precisión.
-    """
     fecha_hoy_txt, anio_actual = obtener_fecha_en_espanol()
     
     prompt_extraccion = [
@@ -190,12 +194,9 @@ def extraer_datos_cliente(texto_usuario, llm):
     ]
     try:
         respuesta = llm.invoke(prompt_extraccion).content.strip()
-        # Limpieza de seguridad por si mete comillas o saltos de línea
         respuesta = respuesta.replace("\n", "").replace('"', '').replace("'", "")
         
         partes = respuesta.split("|")
-        
-        # Corrección automática: Si la IA devuelve menos de 4 partes, rellenamos
         while len(partes) < 4:
             partes.append("SKIP")
             
@@ -206,7 +207,6 @@ def extraer_datos_cliente(texto_usuario, llm):
             "Interés": partes[3].strip() 
         }
     except Exception as e:
-        # En caso de error total, devolvemos estructura vacía segura
         return {
             "Nombre": "SKIP",
             "Teléfono": "SKIP",
@@ -297,6 +297,7 @@ try:
     )
 except Exception as e:
     st.error("Error de conexión. Verifica la API Key.")
+    st.info(f"Detalle: {e}")
     st.stop()
 
 # Historial
