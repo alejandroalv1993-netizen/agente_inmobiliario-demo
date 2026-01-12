@@ -116,8 +116,8 @@ with st.sidebar:
                     csv = df.to_csv(index=False).encode('utf-8')
                     st.download_button("📥 Descargar CRM", csv, "clientes.csv", "text/csv")
                     
-                    # Vista previa más completa para debug
-                    cols_a_mostrar = [c for c in df.columns if c in ["Nombre", "Teléfono", "Reunión/Visita", "Interés"]]
+                    # Vista previa más completa para debug (Incluye Email)
+                    cols_a_mostrar = [c for c in df.columns if c in ["Nombre", "Teléfono", "Email", "Reunión/Visita", "Interés"]]
                     st.dataframe(df[cols_a_mostrar].tail(3), hide_index=True)
                     
                 except Exception as e:
@@ -145,7 +145,7 @@ def seleccionar_modelo_activo(api_key):
         "gemini-1.5-pro-latest",
         "gemini-pro",
         "gemini-1.0-pro",
-        "gemini-2.0-flash-exp" # Último recurso (experimental)
+        "gemini-2.0-flash-exp" 
     ]
     
     for modelo in candidatos:
@@ -155,18 +155,14 @@ def seleccionar_modelo_activo(api_key):
             return modelo
         except:
             continue
-    # Si falla todo, devolvemos gemini-pro que suele ser el más estable en cuentas viejas
     return "gemini-pro"
 
 def extraer_datos_cliente(texto_usuario, llm):
     fecha_hoy_txt, anio_actual = obtener_fecha_en_espanol()
     
     # --- CONTEXTO HISTÓRICO (Memoria a corto plazo) ---
-    # Recuperamos los últimos 2 mensajes para tener contexto
-    # Si el usuario dice "mi tlf es X", la IA mirará el mensaje anterior para ver si dijo "Quiero el ático"
     historial_reciente = ""
     if "messages" in st.session_state and len(st.session_state.messages) > 1:
-        # Tomamos los últimos 4 mensajes para dar contexto suficiente
         ultimos = st.session_state.messages[-4:]
         for m in ultimos:
             role = "Usuario" if isinstance(m, HumanMessage) else "Agente"
@@ -181,18 +177,18 @@ def extraer_datos_cliente(texto_usuario, llm):
         {INVENTARIO_REAL}
         
         TU MISIÓN:
-        Analiza el ÚLTIMO MENSAJE del usuario (usando el historial como contexto) y devuelve UNA sola línea con 4 campos separados por tuberías (|):
-        NOMBRE | TELEFONO | CITA_COMPLETA | INTERES
+        Analiza el ÚLTIMO MENSAJE del usuario (usando el historial como contexto) y devuelve UNA sola línea con 5 campos separados por tuberías (|):
+        NOMBRE | TELEFONO | EMAIL | CITA_COMPLETA | INTERES
         
         REGLAS CRÍTICAS DE EXTRACCIÓN:
         1. Separador OBLIGATORIO: |
         2. Si falta un dato, pon: SKIP
-        3. INTERES (MUY IMPORTANTE):
-           - Busca referencias explícitas (REF-XXX) en el historial reciente o sinónimos (ej: "palacio" -> ático, "finca" -> chalet).
+        3. EMAIL: Busca direcciones de correo válidas (ej: usuario@mail.com).
+        4. INTERES (MUY IMPORTANTE):
+           - Busca referencias explícitas (REF-XXX) en el historial reciente o sinónimos.
            - Si detectas una propiedad específica, pon SU CÓDIGO (ej: REF-001).
            - Si el usuario habla de "un piso" en general, pon GENERAL.
-           - Si en este mensaje NO se menciona nada de propiedades y NO puedes deducirlo por el contexto inmediato, pon SKIP.
-        4. CITA_COMPLETA: Formato "DD/MM/YYYY HH:MM".
+        5. CITA_COMPLETA: Formato "DD/MM/YYYY HH:MM".
         """),
         HumanMessage(content=f"HISTORIAL CONVERSACIÓN:\n{historial_reciente}\n\nMENSAJE A ANALIZAR AHORA: '{texto_usuario}'")
     ]
@@ -201,19 +197,22 @@ def extraer_datos_cliente(texto_usuario, llm):
         respuesta = respuesta.replace("\n", "").replace('"', '').replace("'", "")
         
         partes = respuesta.split("|")
-        while len(partes) < 4:
+        # Rellenamos hasta 5 campos si la IA devuelve menos
+        while len(partes) < 5:
             partes.append("SKIP")
             
         return {
             "Nombre": partes[0].strip(),
             "Teléfono": partes[1].strip(),
-            "Reunión/Visita": partes[2].strip(),
-            "Interés": partes[3].strip() 
+            "Email": partes[2].strip(),
+            "Reunión/Visita": partes[3].strip(),
+            "Interés": partes[4].strip() 
         }
     except Exception as e:
         return {
             "Nombre": "SKIP",
             "Teléfono": "SKIP",
+            "Email": "SKIP",
             "Reunión/Visita": "SKIP",
             "Interés": "SKIP"
         }
@@ -227,11 +226,16 @@ def guardar_lead(texto_usuario, llm):
         datos_nuevos = extraer_datos_cliente(texto_usuario, llm)
         session_id = st.session_state.session_id
         file_path = "leads_inmobiliaria.csv"
-        columnas = ["ID_Sesion", "Fecha_Registro", "Nombre", "Teléfono", "Reunión/Visita", "Interés"]
+        # AÑADIMOS LA COLUMNA EMAIL AL ESQUEMA
+        columnas = ["ID_Sesion", "Fecha_Registro", "Nombre", "Teléfono", "Email", "Reunión/Visita", "Interés"]
         
         if os.path.exists(file_path):
             try:
                 df = pd.read_csv(file_path)
+                # Si el archivo antiguo no tiene columna Email, esto fallará, así que lo manejamos:
+                if "Email" not in df.columns:
+                    df["Email"] = "" # Añadimos columna vacía para compatibilidad
+                
                 df = df[[c for c in df.columns if c in columnas or c == "ID_Sesion"]]
                 for col in columnas:
                     if col not in df.columns: df[col] = "" 
@@ -256,17 +260,13 @@ def guardar_lead(texto_usuario, llm):
         # GUARDAR (CON PROTECCIÓN DE DATOS)
         if indice_usuario is not None:
             cambios = False
-            for campo in ["Nombre", "Teléfono", "Reunión/Visita", "Interés"]:
+            for campo in ["Nombre", "Teléfono", "Email", "Reunión/Visita", "Interés"]:
                 dato = datos_nuevos[campo]
                 
-                # --- LÓGICA DE PROTECCIÓN (NUEVO) ---
-                # Si el dato es SKIP, no hacemos nada.
-                # Si el dato es GENERAL y ya tenemos una REF específica guardada, ¡NO TOCAR!
                 if dato != "SKIP" and dato != "No especificado":
                     valor_actual_db = str(df.at[indice_usuario, campo])
                     
                     if campo == "Interés":
-                        # Si intentamos escribir GENERAL sobre una REF existente, abortamos este campo
                         if dato == "GENERAL" and "REF-" in valor_actual_db:
                             continue
                     
@@ -277,7 +277,8 @@ def guardar_lead(texto_usuario, llm):
                 df.at[indice_usuario, "Fecha_Registro"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 st.toast("✅ Ficha actualizada", icon="🔄")
         else:
-            if datos_nuevos["Teléfono"] != "SKIP" or datos_nuevos["Nombre"] != "SKIP":
+            # Comprobamos si hay al menos un dato útil
+            if any(datos_nuevos[k] != "SKIP" for k in ["Nombre", "Teléfono", "Email"]):
                 datos_limpios = {k: (v if v != "SKIP" else "Pendiente") for k, v in datos_nuevos.items()}
                 nuevo_registro = {
                     "ID_Sesion": session_id,
@@ -327,7 +328,11 @@ if "messages" not in st.session_state:
         INVENTARIO:
         {INVENTARIO_REAL}
         
-        OBJETIVO: Conseguir agendar visita. Pide NOMBRE, TELÉFONO y FECHA/HORA preferida.
+        OBJETIVO: Conseguir agendar visita. Pide NOMBRE, TELÉFONO, EMAIL y FECHA/HORA preferida.
+        
+        REGLA DE ORO SOBRE EMAILS:
+        - NUNCA digas que enviarás un email automático de confirmación, porque no tienes esa función.
+        - DI SIEMPRE que un agente humano revisará la solicitud y les confirmará la cita manualmente (por teléfono o email).
         """)
     ]
 
