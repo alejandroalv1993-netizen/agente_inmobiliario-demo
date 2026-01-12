@@ -6,21 +6,21 @@ import os
 from datetime import datetime
 import uuid
 
-# --- 1. DATOS REALES DE LA INMOBILIARIA (Contexto) ---
+# --- 1. DATOS REALES DE LA INMOBILIARIA (Contexto Enriquecido) ---
 INVENTARIO_REAL = """
 LISTADO DE PROPIEDADES DISPONIBLES EN 'HABITAT FUTURO':
 
 1. REF-001: Ático en Gran Vía (Madrid). Precio: 850.000€.
-   - Palabras clave: ático, gran vía, terraza, vistas, lujo.
+   - Palabras clave: ático, gran vía, terraza, vistas, lujo, palacete, penthouse.
 
 2. REF-002: Piso Familiar en Chamberí. Precio: 620.000€.
-   - Palabras clave: chamberí, familiar, colegio, exterior.
+   - Palabras clave: chamberí, familiar, colegio, exterior, residencia, hogar.
 
 3. REF-003: Loft Industrial en Malasaña. Precio: 450.000€.
-   - Palabras clave: loft, malasaña, industrial, diáfano.
+   - Palabras clave: loft, malasaña, industrial, diáfano, estudio, bohemio.
 
 4. REF-004: Chalet Adosado en Aravaca. Precio: 1.2M€.
-   - Palabras clave: chalet, aravaca, piscina, garaje.
+   - Palabras clave: chalet, aravaca, piscina, garaje, mansión, finca.
 
 CONDICIONES DE LA AGENCIA:
 - Cobramos un 3% de comisión al comprador.
@@ -161,6 +161,17 @@ def seleccionar_modelo_activo(api_key):
 def extraer_datos_cliente(texto_usuario, llm):
     fecha_hoy_txt, anio_actual = obtener_fecha_en_espanol()
     
+    # --- CONTEXTO HISTÓRICO (Memoria a corto plazo) ---
+    # Recuperamos los últimos 2 mensajes para tener contexto
+    # Si el usuario dice "mi tlf es X", la IA mirará el mensaje anterior para ver si dijo "Quiero el ático"
+    historial_reciente = ""
+    if "messages" in st.session_state and len(st.session_state.messages) > 1:
+        # Tomamos los últimos 4 mensajes para dar contexto suficiente
+        ultimos = st.session_state.messages[-4:]
+        for m in ultimos:
+            role = "Usuario" if isinstance(m, HumanMessage) else "Agente"
+            historial_reciente += f"{role}: {m.content}\n"
+
     prompt_extraccion = [
         SystemMessage(content=f"""
         ERES UN MOTOR DE EXTRACCIÓN DE DATOS CRM.
@@ -170,27 +181,20 @@ def extraer_datos_cliente(texto_usuario, llm):
         {INVENTARIO_REAL}
         
         TU MISIÓN:
-        Analiza el texto del usuario y devuelve UNA sola línea con 4 campos separados por tuberías (|):
+        Analiza el ÚLTIMO MENSAJE del usuario (usando el historial como contexto) y devuelve UNA sola línea con 4 campos separados por tuberías (|):
         NOMBRE | TELEFONO | CITA_COMPLETA | INTERES
         
-        EJEMPLOS DE ENTRENAMIENTO (ÚSALOS COMO GUÍA):
-        
-        Usuario: "Hola, soy Ana, mi movil es 600112233 y quiero ver el ático mañana a las 5"
-        Tu respuesta: Ana | 600112233 | {anio_actual}-MM-DD 17:00 | REF-001
-        
-        Usuario: "Me interesa el piso de chamberi, llamame al 911223344"
-        Tu respuesta: SKIP | 911223344 | SKIP | REF-002
-        
-        Usuario: "Quiero cita para el loft el martes 20 por la tarde. Soy Carlos."
-        Tu respuesta: Carlos | SKIP | 20/MM/{anio_actual} (Tarde) | REF-003
-        
-        REGLAS:
+        REGLAS CRÍTICAS DE EXTRACCIÓN:
         1. Separador OBLIGATORIO: |
         2. Si falta un dato, pon: SKIP
-        3. Para INTERES, usa SIEMPRE el código (REF-XXX). Si no sabes cual es, pon GENERAL.
-        4. Para CITA_COMPLETA, calcula la fecha exacta basándote en que hoy es {fecha_hoy_txt}.
+        3. INTERES (MUY IMPORTANTE):
+           - Busca referencias explícitas (REF-XXX) en el historial reciente o sinónimos (ej: "palacio" -> ático, "finca" -> chalet).
+           - Si detectas una propiedad específica, pon SU CÓDIGO (ej: REF-001).
+           - Si el usuario habla de "un piso" en general, pon GENERAL.
+           - Si en este mensaje NO se menciona nada de propiedades y NO puedes deducirlo por el contexto inmediato, pon SKIP.
+        4. CITA_COMPLETA: Formato "DD/MM/YYYY HH:MM".
         """),
-        HumanMessage(content=f"Analiza esto ahora mismo: '{texto_usuario}'")
+        HumanMessage(content=f"HISTORIAL CONVERSACIÓN:\n{historial_reciente}\n\nMENSAJE A ANALIZAR AHORA: '{texto_usuario}'")
     ]
     try:
         respuesta = llm.invoke(prompt_extraccion).content.strip()
@@ -249,12 +253,23 @@ def guardar_lead(texto_usuario, llm):
                     df.at[idx, "ID_Sesion"] = session_id
                     break
 
-        # GUARDAR
+        # GUARDAR (CON PROTECCIÓN DE DATOS)
         if indice_usuario is not None:
             cambios = False
             for campo in ["Nombre", "Teléfono", "Reunión/Visita", "Interés"]:
                 dato = datos_nuevos[campo]
+                
+                # --- LÓGICA DE PROTECCIÓN (NUEVO) ---
+                # Si el dato es SKIP, no hacemos nada.
+                # Si el dato es GENERAL y ya tenemos una REF específica guardada, ¡NO TOCAR!
                 if dato != "SKIP" and dato != "No especificado":
+                    valor_actual_db = str(df.at[indice_usuario, campo])
+                    
+                    if campo == "Interés":
+                        # Si intentamos escribir GENERAL sobre una REF existente, abortamos este campo
+                        if dato == "GENERAL" and "REF-" in valor_actual_db:
+                            continue
+                    
                     df.at[indice_usuario, campo] = dato
                     cambios = True
             
